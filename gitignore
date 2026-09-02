@@ -1,0 +1,44 @@
+# =============================================================================
+#  romi_nav — .gitignore
+# -----------------------------------------------------------------------------
+#  The placeholder AgentPolicy stub lives INLINE in recommendation_node.py and
+#  is INTENTIONALLY published (it's our own stub, clearly marked
+#  "# TODO: replace with trained IL/RL model"). Only two things stay private:
+#  trained models, and the collected imitation-learning data logs.
+# =============================================================================
+
+# --- Trained models (private; a future model replaces the inline stub) -------
+# agent_policy.py            # uncomment ONLY if you later split a private model out
+models/
+*.pt
+*.pth
+*.onnx
+*.pkl
+*.ckpt
+
+# --- Imitation-learning data logs (private) ----------------------------------
+data/
+*.jsonl
+
+# --- ROS 2 / colcon build artifacts ------------------------------------------
+build/
+install/
+log/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# --- (maps/ and worlds/ are KEPT — the repo needs them to run) ----------------
+
+# --- Python environments -----------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Editor / OS cruft --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
