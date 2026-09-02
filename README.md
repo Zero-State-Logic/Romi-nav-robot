@@ -246,18 +246,13 @@ Recovery/backup maneuvers are **never** logged as decisions. `data/` is git-igno
 > icons. Names are referenced exactly — match them.
 
 **Mapped room (RViz):**
-![map](media/map.png)
+![map](maps/romi_map.png)
 
 **Harness presenting two candidates:**
-![harness choice](media/harness_choice.png)
+![harness choice](maps/romi_map_clean.png)
 
 **Robot executing the chosen leg:**
 ![robot leg](media/robot_leg.png)
-
-### 🎥 Video Demo
-`TODO: add a short screen-recording link of a full choose → drive → log cycle`
-
----
 
 ## 📄 License
 
@@ -269,6 +264,5 @@ explicit patent grant, appropriate for research code.
 ## 📬 Contact
 
 **Zero State Logic** — Faysal Ali Shah
-- Portfolio: `TODO`
 - LinkedIn: `TODO`
 - Email: see `package.xml` maintainer field
