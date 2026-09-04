@@ -255,9 +255,13 @@ Recovery/backup maneuvers are **never** logged as decisions. `data/` is git-igno
 ![map](media/map.png)
 
 ### 🎥 Video Demo
-<!-- In GitHub's web editor (edit this README, pencil icon), put the cursor on the
-     next line and DRAG your recording (VID-...WA0016.mp4, ~5 MB) into the box.
-     GitHub uploads it and inserts a link that renders as an inline video player. -->
+
+https://github.com/user-attachments/assets/cf505373-b28f-44a3-a98c-22831da17a9a
+
+
+https://github.com/user-attachments/assets/99e2e9af-dbf9-4e2d-8d8e-6ed328920be3
+
+
 
 ## 📄 License
 
@@ -269,6 +273,5 @@ explicit patent grant, appropriate for research code.
 ## 📬 Contact
 
 **Zero State Logic** — Faysal Ali Shah
-- Portfolio: `TODO`
-- LinkedIn: `TODO`
+**M-A-S1** — Muhammad Ali
 - Email: see `package.xml` maintainer field
