@@ -272,6 +272,8 @@ explicit patent grant, appropriate for research code.
 
 ## 📬 Contact
 
-**Zero State Logic** — Faysal Ali Shah/n
-**M-A-S1** — Muhammad Ali/n
+**Zero State Logic** — Faysal Ali Shah 
+
+
+**M-A-S1** — Muhammad Ali
 - Email: see `package.xml` maintainer field
