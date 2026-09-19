@@ -1,279 +1,191 @@
-<!-- ============================================================= -->
-<!--  BANNER: save a project banner as media/banner.png            -->
-<!--  (a clean RViz map shot or the robot render works well)       -->
-<!-- ============================================================= -->
-![romi_nav banner](media/banner.png)
+# ROMI Nav Robot (Kiyocore)
 
-# romi_nav — Human-in-the-Loop Nav2 Recommendation Harness
+A differential/mecanum ROS 2 robot for **human-in-the-loop navigation data collection** — built for ROMI Lab's imitation-learning research (avoiding SLAM tracking failures at doorways/textureless areas).
 
-![ROS 2](https://img.shields.io/badge/ROS_2-Humble-22314E?logo=ros&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
-![Sim](https://img.shields.io/badge/Sim-Webots_R2025a-000000)
-![Nav2](https://img.shields.io/badge/Navigation-Nav2-4E9A06)
-![SLAM](https://img.shields.io/badge/Mapping-slam__toolbox-informational)
-![License](https://img.shields.io/badge/License-Apache_2.0-blue)
-
-> A ROS 2 harness for collecting **imitation-learning** data on a mobile robot.
-> At each short leg the robot offers **two candidate moves** — one from the Nav2
-> planner, one from an agent — a **human picks one**, and only that leg runs.
-> Every decision is logged as training data.
-
-<sub>Built under <b>Zero State Logic</b> · for ROMI Lab · simulation working end-to-end (Webots + TurtleBot3), physical robot (RPi 4B + RPLIDAR A1, 4-wheel differential drive) in progress.</sub>
+At each step the robot presents **two candidate moves** — one from the Nav2 planner, one from an agent (stub, swappable for a trained model) — a **human chooses**, the robot drives a fixed ~8 cm step, and **every decision is logged** as imitation-learning training data.
 
 ---
 
-## 🤖 Overview
+## Hardware
 
-**What it is:** a decision-logging harness. It asks Nav2's `planner_server` for a
-candidate path (a pure `ComputePathToPose` query — nothing moves), gets a second
-candidate from a pluggable agent, prints both in plain robot-relative language
-(*"slight left, ~0.5 m"*), and executes **only the human's choice** by sending that
-one short segment straight to `controller_server`'s `FollowPath` action. It
-deliberately bypasses `bt_navigator`/`NavigateToPose` so autonomous replanning and
-recovery spins never contaminate a labeled leg. Every decision is appended as one
-JSON line to `~/romi_ws/data/decisions_<timestamp>.jsonl`.
+| Part | Role |
+|------|------|
+| Raspberry Pi 4B (Ubuntu 22.04 + ROS 2 Humble) | On-board computer: sensors, motors, odometry |
+| ESP32-WROOM | Motor controller (4× TT motors via 2× L298N), micro-ROS |
+| ESP32-C3 Mini + analog joystick | Manual teleop controller (USB serial to laptop) |
+| RPLIDAR A1 | 2D LiDAR (mapping + obstacle sensing) |
+| MPU6050 | IMU (fused with laser odometry) |
+| 4× mecanum wheels | Drive (skid-steer turn + strafe) |
+| 4S 18650 pack + BMS | Power |
+| Laptop (Ubuntu 22.04 + ROS 2 Humble) | Planner, recommendation node, RViz, joystick |
 
-**What it isn't:** an autonomous navigator. The agent is a **swap-point** — the
-included `AgentPolicy` is a clearly-marked heuristic stub (`# TODO: replace with
-trained IL/RL model`); a trained model drops in behind the same `propose(obs)`
-contract with no changes to the harness loop.
-
----
-
-## 🧠 How it works
-
-```
-        ┌──────────────┐  candidate A (planner path slice)
- goal ─▶│ planner_server│─────────────────────────────────┐
-        │ (path query)  │                                  ▼
-        └──────────────┘                        ┌────────────────────┐  [1]/[2]
-                                                 │ recommendation node │◀─ human
-        ┌──────────────┐  candidate B            │  (RecommendationHarness) │
-        │  AgentPolicy │────────────────────────▶└────────────────────┘
-        │  (stub, in-repo)│                                 │ chosen leg only
-        └──────────────┘                                    ▼
-                                        validate_path() ▶ controller_server / FollowPath
-                                                            │
-                                                            ▼
-                                              decision ▶ data/*.jsonl
-```
-
-1. Human clicks a goal in RViz (published to **`/harness/goal`**, *not* `/goal_pose`).
-2. The node queries Nav2 for a planner candidate and the agent for a second one.
-3. Both are printed as short, robot-relative options, **in randomized order** (so
-   position bias doesn't poison the labels — the true order is logged). Nothing moves.
-4. Human presses `1` or `2`; the chosen ~0.5 m leg executes via `FollowPath`.
-5. The decision (pose, downsampled scan, both candidates, choice, outcome) is logged.
-
-**Design details worth knowing (all in the code):**
-- **`validate_path()`** gates every chosen leg against the global costmap — the
-  agent's synthesized straight-line leg can cut through a wall, so a blocked leg is
-  clipped or refused, and logged once with its true outcome.
-- **`recover()`** frees a wedged robot with a scan+costmap-fused, **reverse-first**
-  escape (the LDS is blind below ~0.12 m; the costmap still sees the contact).
-  Recovery is housekeeping — it runs *after* the stuck leg is logged and is **never**
-  itself logged as a decision.
-- **Direct `FollowPath`** avoids a Humble-era `bt_navigator` action-client race that
-  instantly aborts fast micro-goals.
+**Architecture:** Pi = sensors + motors + odometry. Laptop = planner + recommendation node + RViz + joystick. They talk over Wi-Fi (ROS 2 DDS, same `ROS_DOMAIN_ID`).
 
 ---
 
-## 📦 Repository layout
+## Build From Scratch
 
-```
-romi_nav/                      # ROS 2 package (ament_python)
-  romi_nav/
-    recommendation_node.py       # the harness + inline AgentPolicy stub
-    __init__.py
-  launch/
-    bringup.launch.py            # Webots + TurtleBot3 driver (publishes /clock)
-    slam.launch.py               # slam_toolbox online-async mapping
-    nav.launch.py                # AMCL + Nav2 on the saved static map
-  config/
-    nav2_params.yaml             # planner / controller / costmap params
-  worlds/
-    romi_small.wbt               # ROMI Lab custom Webots world
-  resource/romi_nav
-  setup.py
-  package.xml
-maps/
-  romi_map.yaml / .pgm           # raw slam_toolbox output
-  romi_map_clean.yaml / .pgm     # cleaned map used for navigation (canonical)
-media/                           # screenshots for this README
-README.md
-LICENSE                          # MIT
-.gitignore
-```
+### 1. Flash the Pi
+- Raspberry Pi Imager → **Ubuntu Server 22.04 LTS (64-bit)** (NOT Desktop, NOT 24.04).
+- In Imager settings: set hostname `kiyocore`, user `ubuntu`, enable SSH (password), enter Wi-Fi (**2.4 GHz**), country PK, locale Asia/Karachi.
 
-**Never committed (by design):** trained models, `data/*.jsonl`, build artifacts.
-
-> Note for cloners: the launch files reference maps under `~/romi_ws/maps/`. After
-> cloning, copy `maps/*` there, or pass `map:=<repo>/maps/romi_map_clean.yaml`.
-
----
-
-## ⚙️ Setup & build
-
+### 2. Install ROS 2 Humble (on Pi AND laptop)
 ```bash
-# Ubuntu 22.04 + ROS 2 Humble + Nav2 + webots_ros2 + slam_toolbox
-cd ~/romi_ws
-colcon build --packages-select romi_nav
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list
+sudo apt update
+sudo apt install -y ros-humble-ros-base ros-dev-tools python3-colcon-common-extensions   # laptop: ros-humble-desktop for RViz
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+echo "export ROS_DOMAIN_ID=0" >> ~/.bashrc
+source ~/.bashrc
 ```
 
-Source both in **every** terminal below:
-
+### 3. Install dependencies
+**Pi:**
 ```bash
-source /opt/ros/humble/setup.bash
+sudo apt install -y ros-humble-rplidar-ros ros-humble-robot-localization ros-humble-slam-toolbox i2c-tools python3-smbus
+# enable I2C: add 'dtparam=i2c_arm=on' to /boot/firmware/config.txt, then reboot
+# micro-ROS agent: build from source in ~/microros_ws (see micro-ROS docs)
+```
+**Laptop:**
+```bash
+sudo apt install -y ros-humble-navigation2 ros-humble-nav2-bringup python3-serial
+```
+
+### 4. Get the code
+```bash
+git clone https://github.com/Zero-State-Logic/Romi-nav-robot.git
+# Pi:    copy robot_ws + microros_ws + imu_node.py
+# Laptop: copy romi_ws + joy_serial.py
+cd ~/robot_ws && colcon build && source install/setup.bash      # Pi
+cd ~/romi_ws  && colcon build && source install/setup.bash      # laptop
+```
+
+### 5. Flash the ESP32s
+- **WROOM**: Arduino IDE → ESP32 Dev Module → add `micro_ros_arduino` (humble branch ZIP) → flash `firmware/wroom_mecanum.ino`.
+- **C3 Mini**: Arduino IDE → ESP32C3 Dev Module → flash `firmware/c3_joystick.ino` (plain serial, no micro-ROS).
+
+---
+
+## Change / Set Up a New Wi-Fi Network
+
+The Pi joins whatever Wi-Fi it's told to. To point it at a new network:
+
+**If you can SSH into the Pi:**
+```bash
+sudo nano /etc/netplan/50-cloud-init.yaml
+```
+Edit the `wifis` block:
+```yaml
+network:
+  version: 2
+  wifis:
+    wlan0:
+      dhcp4: true
+      access-points:
+        "NEW_NETWORK_NAME":
+          password: "NEW_PASSWORD"
+```
+(spaces only, no tabs) then:
+```bash
+sudo netplan apply
+```
+
+**If you CAN'T reach the Pi (no monitor):**
+1. Power off, put the SD card in a computer.
+2. Open the `system-boot` partition, edit `network-config`, set the new SSID/password.
+3. Eject, reboot the Pi.
+
+**Notes:** Pi Wi-Fi prefers **2.4 GHz**. Both Pi and laptop must be on the **same network** and same `ROS_DOMAIN_ID=0`. A phone hotspot works well (no client isolation). The Pi's IP may change per network — find it in the router / hotspot device list, then `ssh ubuntu@<IP>`.
+
+---
+
+## Running the Robot
+
+> Power: Pi on wall power for mapping. WROOM + LiDAR → Pi. C3 joystick → laptop. Hotspot on, both devices connected.
+
+### PI — Terminal 1 — LiDAR
+```bash
+sudo chmod 666 /dev/ttyUSB0
+sudo stty -F /dev/ttyUSB0 115200 cs8 -cstopb -parenb
+export ROS_DOMAIN_ID=0 && source /opt/ros/humble/setup.bash
+ros2 run rplidar_ros rplidar_composition --ros-args \
+  -p serial_port:=/dev/ttyUSB0 -p serial_baudrate:=115200 \
+  -p frame_id:=laser -p angle_compensate:=true
+```
+
+### PI — Terminal 2 — Robot Bringup (motors + IMU + odometry)
+```bash
+sudo chmod 666 /dev/ttyACM0
+export ROS_DOMAIN_ID=0 && source /opt/ros/humble/setup.bash
+source ~/robot_ws/install/setup.bash
+ros2 launch kiyocore_bringup bringup.launch.py
+```
+
+### PI — Terminal 3 — SLAM (only when mapping a room)
+```bash
+export ROS_DOMAIN_ID=0 && source /opt/ros/humble/setup.bash
+source ~/robot_ws/install/setup.bash
+ros2 launch slam_toolbox online_async_launch.py \
+  slam_params_file:=/home/ubuntu/robot_ws/install/kiyocore_bringup/share/kiyocore_bringup/config/slam.yaml
+```
+Drive one slow loop back to start, then save:
+```bash
+mkdir -p ~/robot_ws/maps
+ros2 run nav2_map_server map_saver_cli -f ~/robot_ws/maps/my_room
+```
+
+### LAPTOP — Terminal 1 — Joystick
+```bash
+sudo chmod 666 /dev/ttyACM0
+export ROS_DOMAIN_ID=0 && source /opt/ros/humble/setup.bash
+python3 ~/joy_serial.py
+```
+Joystick drives the robot. Button toggles strafe (mecanum).
+
+### LAPTOP — Terminal 2 — Nav2 Planner
+```bash
+export ROS_DOMAIN_ID=0 && source /opt/ros/humble/setup.bash
 source ~/romi_ws/install/setup.bash
+ros2 launch romi_nav planner_only.launch.py
 ```
 
----
-
-## 🗺️ Phase 1 — Map the room (do this once)
-
+### LAPTOP — Terminal 3 — RViz
 ```bash
-# T1 — simulation + robot
-ros2 launch romi_nav bringup.launch.py
-
-# T2 — SLAM
-ros2 launch romi_nav slam.launch.py
-
-# T3 — drive the robot around until the whole room is mapped (watch /map in RViz)
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
-
-# T4 — save the map
-ros2 run nav2_map_server map_saver_cli -f ~/romi_ws/maps/romi_map
-```
-
-This writes `romi_map.pgm` + `romi_map.yaml`. Optionally clean the `.pgm` (e.g. in
-GIMP — erase stray specks, close gaps) and save it as `romi_map_clean.pgm` /
-`romi_map_clean.yaml`; that cleaned map is what the harness navigates on.
-
----
-
-## 🚀 Phase 2 — Run the harness (on the saved map)
-
-Four terminals, **in this order** (Nav2 needs the sim clock first, or lifecycle
-configuration times out):
-
-```bash
-# T1 — simulation + robot
-ros2 launch romi_nav bringup.launch.py
-
-# T2 — Nav2 on the saved map
-ros2 launch romi_nav nav.launch.py map:=$HOME/romi_ws/maps/romi_map_clean.yaml
-
-# T3 — RViz (localize with "2D Pose Estimate" if AMCL isn't already)
+export ROS_DOMAIN_ID=0 && source /opt/ros/humble/setup.bash
 rviz2
+```
+Fixed Frame = `odom`. Add `/scan`. Use **2D Goal Pose** to click a goal.
 
-# T4 — the harness
+### LAPTOP — Terminal 4 — Recommendation Node
+```bash
+export ROS_DOMAIN_ID=0 && source /opt/ros/humble/setup.bash
+source ~/romi_ws/install/setup.bash
 ros2 run romi_nav recommendation_node
 ```
-
-### ⚠️ The one thing people get wrong
-
-The harness listens on **`/harness/goal`**, not `/goal_pose`. In RViz:
-`Panels → Tool Properties → 2D Goal Pose → Topic: /harness/goal`. On `/goal_pose`,
-Nav2 autopilots the robot and the harness never gets to offer a choice.
-
-**Success looks like:** you click a goal and the robot does **NOT** move. T4 prints
-two options and waits. You press `1` or `2`, and *then* it drives one short leg.
-That is the moment training data is being generated.
+Click a goal in RViz. The node shows:
+```
+[1] Nav2 : <direction>
+[2] Agent: <direction>
+```
+Choose: **1** = Nav2 drives one ~8 cm step | **2** = you drive that step with the joystick | **s** = skip | **q** = quit.
+Every choice is logged to `~/romi_ws/data/decisions_<time>.jsonl`.
 
 ---
 
-## 🧾 Data format
+## The Data
 
-Each decision is one JSON object per line in `~/romi_ws/data/decisions_<ts>.jsonl`:
+`~/romi_ws/data/decisions_*.jsonl` (on the laptop) — each row: pose, goal, Nav2 suggestion, agent suggestion, chosen option. This is the imitation-learning dataset.
 
-| field | meaning |
-|---|---|
-| `t_wall`, `t_sim` | wall-clock and sim-clock timestamps |
-| `step`, `goal_seq` | leg index within the episode, and which goal |
-| `final_goal`, `pose` | episode goal and robot pose (`x`, `y`, `yaw`) |
-| `scan` | LaserScan downsampled to `scan_beams` (default 72) ranges |
-| `nav2_candidate` | planner candidate + `path_length` |
-| `agent_candidate` | agent's proposed micro-goal |
-| `chosen` | `"nav2"` or `"agent"` |
-| `display_order` | true on-screen order (bias audit) |
-| `outcome` | `reached`, `duration_s`, optional `note` (clipped / stuck / vetoed) |
-
-Recovery/backup maneuvers are **never** logged as decisions. `data/` is git-ignored.
+**Swap in a trained agent:** edit `agent_suggestion()` in `recommendation_node.py` — replace the stub with your model's output (same return: a target `(x, y)`).
 
 ---
 
-## 🧩 Agent (swap-point)
-
-`recommendation_node.py` defines `AgentPolicy` inline and calls
-`.propose(obs)` for the second candidate, where
-`obs = {'pose', 'final_goal', 'scan'}`.
-
-- **Included stub:** heads roughly toward the goal but perturbs the heading by a
-  random 20–45°, resampling if the LiDAR shows an obstacle within the step — plausible,
-  clearly different from Nav2, never a wall-crash.
-- **Trained model:** replace the body of `propose()`; the contract (and a future
-  `'image'` key for a visual policy) keeps the harness loop unchanged.
+## Shutdown
+Ctrl+C all terminals. On the Pi: `sudo poweroff`, wait for the green LED to stop, then unplug.
 
 ---
 
-## 🛠️ Troubleshooting
-
-| Symptom | Cause / fix |
-|---|---|
-| Every leg aborts; robot creeps then stops | Goal-checker rejecting very short (~0.5 m) goals — read `controller_server`/`planner_server` output; adjust tolerances in `nav2_params.yaml` (goal checker: xy 0.10 m / yaw 0.5 rad). |
-| Nav2 never activates (lifecycle managers abort at configure) | Confirm the `map:=` file exists (`ls ~/romi_ws/maps/`), and that T1 (publishing `/clock`) is up **before** Nav2. |
-| Chosen leg would drive through a wall | `validate_path()` clips/refuses it against the global costmap; ensure `always_send_full_costmap` is set and the global costmap topic is latched. |
-| Robot wedged, every goal fails | The node's own recovery reverses out and clears costmaps; if it can't, teleop the robot clear. |
-| `/tmp/...world` in the Webots title bar | The launch generated a scratch world — make sure it loads `worlds/romi_small.wbt`. |
-
----
-
-## 🔩 Hardware (physical robot)
-
-- **Drive:** 4-wheel **skid-steer / differential** — Nav2 treats it as a standard
-  diff-drive base, so the sim config ports over.
-- **Compute split:** the **Pi** runs only drivers (RPLIDAR A1 + the ESP32-S3 motor
-  bridge); the **laptop** runs Nav2, SLAM, RViz, the harness, and the agent. One ROS 2
-  graph over WiFi — `/scan`, `/odom`, `/cmd_vel` are identical to the sim, so the
-  harness doesn't change.
-- **Motor map, wiring, BOM, chassis DXFs:** `TODO — add when finalized.`
-
----
-
-## 📸 System Demonstration
-
-> Save these into `media/` before pushing, or GitHub shows broken-image icons.
-> Names are referenced exactly — match them.
-
-**The full loop in action** — candidate choices in the terminal, the Webots sim, and the live map/robot pose in RViz:
-![demo overview](media/demo_overview.png)
-
-**The harness presenting two candidates, and the human choosing (`-> executing [1] (nav2)` / `(agent)`):**
-![harness choice](media/harness_choice.png)
-
-**Mapped room (RViz):**
-![map](media/map.png)
-
-### 🎥 Video Demo
-
-https://github.com/user-attachments/assets/cf505373-b28f-44a3-a98c-22831da17a9a
-
-
-https://github.com/user-attachments/assets/99e2e9af-dbf9-4e2d-8d8e-6ed328920be3
-
-
-
-## 📄 License
-
-Released under the **Apache License 2.0** (see `LICENSE`) — chosen over MIT for its
-explicit patent grant, appropriate for research code.
-
----
-
-## 📬 Contact
-
-**Zero State Logic** — Faysal Ali Shah 
-
-
-**M-A-S1** — Muhammad Ali
-- Email: see `package.xml` maintainer field
+*Built by Zero State Logic.*
